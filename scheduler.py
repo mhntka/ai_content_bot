@@ -2,34 +2,44 @@ import asyncio
 import random
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from parser import parse_all
+from parser import parse_all_for_user
 from ai_writer import generate_post
-from database import is_published, mark_published, save_draft
-from config import POST_INTERVAL_MIN, POST_INTERVAL_MAX, BOT_TOKEN
+from database import (
+    is_published, mark_published, save_draft, get_user_sources,
+    get_or_create_user, get_due_scheduled_posts, mark_scheduled_published,
+    check_subscription
+)
+from config import POST_INTERVAL_MIN, POST_INTERVAL_MAX, BOT_TOKEN, DB_NAME
 from aiogram import Bot
-from handlers import get_draft_keyboard
+import aiosqlite
 
 bot = Bot(token=BOT_TOKEN)
 
-async def publish_post():
-    """
-    Задача: найти статью → сгенерировать → отправить АДМИНУ в личку с кнопками
-    """
-    print("🔄 Запуск генерации черновика...")
+async def publish_for_user(user_id: int):
+    """Генерация и отправка черновика для одного пользователя"""
     
-    # 1. Парсинг
-    articles = await parse_all()
-    new_articles = [a for a in articles if not await is_published(a['url'])]
-    
-    if not new_articles:
-        print("📭 Новых статей нет, пропускаю")
+    # Проверяем подписку
+    sub = await check_subscription(user_id)
+    if not sub['active']:
         return
     
-    # 2. Берём первую новую
-    article = new_articles[0]
-    print(f"📰 Статья: {article['title'][:60]}...")
+    # Парсинг
+    articles = await parse_all_for_user(user_id)
     
-    # 3. Генерация
+    if not articles:
+        return
+    
+    # Берём первую новую
+    article = None
+    for a in articles:
+        if not await is_published(user_id, a['url']):
+            article = a
+            break
+    
+    if not article:
+        return
+    
+    # Генерация
     result = await generate_post(
         title=article['title'],
         source_url=article['url'],
@@ -39,68 +49,97 @@ async def publish_post():
     )
     
     if not result['success']:
-        print(f"❌ Ошибка генерации: {result['error']}")
         return
     
-    print(f"✅ Пост сгенерирован (стиль: {result.get('style', 'unknown')})")
-    
-    # 4. Сохраняем черновик в БД
+    # Сохраняем черновик
     draft_id = await save_draft(
-        url=article['url'],
+        user_id=user_id,
+        source_url=article['url'],
         text=result['text'],
         title=article['title'],
-        source=article.get('source', '')
+        source_name=article.get('source', ''),
+        style=result.get('style', '')
     )
     
-    # 5. Отправляем АДМИНУ в личку (не в канал!)
-    admin_id = None
-    try:
-        # Получаем ID первого владельца бота
-        me = await bot.get_me()
-        # Для простоты - шлём тому, кто запустил бота последним
-        # В продакшене лучше захардкодить admin_id в config.py
-        from config import ADMIN_ID
-        admin_id = ADMIN_ID
-    except:
-        print("❌ Не удалось получить ADMIN_ID")
-        return
+    # Отправляем пользователю
+    from inline_menu import get_draft_keyboard
     
-    if not admin_id:
-        print("❌ ADMIN_ID не указан в config.py")
-        return
+    draft_text = f"""
+📝 **НОВЫЙ ЧЕРНОВИК #{draft_id}**
+━━━━━━━━━━━━━━━━
+{result['text']}
+
+━━━━━━━━━━━━━━━━
+🔗 Источник: {article['url']}
+🏷️ Стиль: {result.get('style', 'unknown')}
+"""
     
     try:
-        keyboard = get_draft_keyboard(draft_id)
-        
         await bot.send_message(
-            chat_id=admin_id,
-            text=f"📝 НОВЫЙ ЧЕРНОВИК #{draft_id}\n\n{result['text']}",
-            reply_markup=keyboard,
+            chat_id=user_id,
+            text=draft_text.strip(),
+            reply_markup=get_draft_keyboard(draft_id),
             parse_mode='Markdown'
         )
         
-        print(f"✅ Черновик #{draft_id} отправлен админу")
+        await mark_published(user_id, article['url'])
         
     except Exception as e:
-        print(f"❌ Ошибка отправки: {e}")
+        print(f"❌ Ошибка отправки пользователю {user_id}: {e}")
 
+async def check_scheduled_posts_job():
+    """Фоновая задача для публикации запланированных постов"""
+    due_posts = await get_due_scheduled_posts()
+    
+    for post in due_posts:
+        try:
+            if not post['target_channel_id']:
+                print(f"⚠️ У пользователя {post['user_id']} не привязан канал для поста #{post['draft_id']}")
+                continue
+                
+            await bot.send_message(
+                chat_id=post['target_channel_id'],
+                text=post['post_text'],
+                parse_mode='Markdown'
+            )
+            
+            await mark_scheduled_published(post['sched_id'])
+            print(f"✅ Запланированный пост #{post['draft_id']} опубликован в {post['target_channel_id']}")
+            
+        except Exception as e:
+            print(f"❌ Ошибка публикации запланированного поста {post['sched_id']}: {e}")
 
-def get_random_interval():
-    minutes = random.randint(POST_INTERVAL_MIN, POST_INTERVAL_MAX)
-    return minutes / 60
-
+async def publish_for_all_users():
+    """Генерация черновиков для всех активных пользователей"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT telegram_id FROM users WHERE subscription_status != 'inactive'"
+        )
+        users = await cursor.fetchall()
+    
+    tasks = [publish_for_user(user['telegram_id']) for user in users]
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 def start_scheduler():
     scheduler = AsyncIOScheduler()
     
+    # Интервал генерации новых черновиков
     scheduler.add_job(
-        publish_post,
-        trigger=IntervalTrigger(hours=get_random_interval()),
+        publish_for_all_users,
+        trigger=IntervalTrigger(minutes=random.randint(POST_INTERVAL_MIN, POST_INTERVAL_MAX)),
         id='content_publisher',
-        replace_existing=True,
-        misfire_grace_time=300
+        replace_existing=True
+    )
+    
+    # Проверка запланированных постов каждую минуту
+    scheduler.add_job(
+        check_scheduled_posts_job,
+        trigger='interval',
+        minutes=1,
+        id='scheduled_publisher'
     )
     
     scheduler.start()
-    print(f"⏰ Планировщик запущен: посты каждые {POST_INTERVAL_MIN//60}-{POST_INTERVAL_MAX//60} часов")
+    print("⏰ Планировщик запущен: генерация черновиков и публикация по расписанию.")
     return scheduler

@@ -14,15 +14,13 @@ async def main():
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
     
-    # Регистрируем роутер с хендлерами
     dp.include_router(router)
     
-    # Запуск планировщика
     scheduler = start_scheduler()
     
-    print("🚀 Бот запущен! Черновики будут приходить в личку админа.")
+    print("🚀 Бот запущен!")
+    print("💡 Используй /start для начала")
     
-    # Запуск поллинга
     await dp.start_polling(bot)
 
 if __name__ == '__main__':

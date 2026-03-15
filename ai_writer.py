@@ -5,8 +5,8 @@ from config import GROQ_API_KEY, GROQ_MODEL, POST_STYLES, STYLE_EMOJIS
 
 client = AsyncGroq(api_key=GROQ_API_KEY)
 
-def get_random_style() -> tuple[str, str]:
-    """Случайный стиль поста + эмодзи"""
+def get_random_style() -> tuple:
+    """Случайный стиль"""
     style = random.choice(POST_STYLES)
     emoji = STYLE_EMOJIS.get(style, '📌')
     return style, emoji
@@ -18,64 +18,50 @@ async def generate_post(
     summary: str = '',
     source_name: str = ''
 ) -> dict:
-    """
-    Генерация поста с ротацией стилей для разнообразия.
-    """
+    """Генерация поста"""
+    
     style, emoji = get_random_style()
     
-    # Инструкции в зависимости от стиля
     style_instructions = {
-        'factual': 'Пиши кратко, только факты и цифры. Без оценок.',
-        'analytical': 'Добавь анализ: почему это произошло, какие последствия.',
-        'practical': 'Сделай акцент на пользе: как это использовать, что даст читателю.',
-        'news': 'Пиши как срочную новость: что, где, когда. Динамично.',
-        'question': 'Закончи пост вопросом к аудитории для вовлечения.'
+        'factual': 'Пиши кратко, только факты.',
+        'analytical': 'Добавь анализ и последствия.',
+        'practical': 'Сделай акцент на пользе.',
+        'news': 'Пиши как срочную новость.',
+        'question': 'Закончи вопросом к аудитории.'
     }
     
-    # Инструкции для английских статей
     if lang == 'en':
-        lang_block = """
-📌 СТАТЬЯ НА АНГЛИЙСКОМ:
-• Переведи заголовок на русский, адаптируй для РФ/СНГ
-• Выдели 1-2 ключевых факта
-• Объясни, почему это важно для нас
-• Пиши пост ПОЛНОСТЬЮ на русском
-"""
+        lang_block = "📌 Переведи на русский и адаптируй.\n"
     else:
         lang_block = ""
     
-    # Источник для контекста
-    source_note = f"Источник: {source_name}. " if source_name else ""
-    
     prompt = f"""
-Ты — профессиональный контент-менеджер Telegram-канала про ИИ.
+Ты — контент-менеджер Telegram-канала про ИИ.
 
 {lang_block}
-СТИЛЬ ПОСТА: {style} ({style_instructions[style]})
-{source_note}
+СТИЛЬ: {style} ({style_instructions[style]})
+ИСТОЧНИК: {source_name}
+
 ЗАГОЛОВОК: {title}
-СУТЬ: {summary[:150] if summary else 'Нет дополнительной информации'}
+СУТЬ: {summary[:150] if summary else 'Нет доп. информации'}
 
 ПРАВИЛА:
-✅ Заголовок: **жирным**, 8-12 слов, цепляющий, на русском
-✅ Суть: 2-3 коротких предложения, только факты
-✅ Важно: 1 предложение — конкретная выгода или инсайт
-✅ Хэштеги: 3-4 коротких, на русском, без пробелов
-✅ Эмодзи: 1-2 шт, только в начале разделов
-✅ Язык: русский, живой, без канцелярита и воды
+✅ Заголовок: **жирным**, 8-12 слов
+✅ Суть: 2-3 предложения
+✅ Важно: 1 предложение
+✅ Хэштеги: 3-4 коротких
+✅ Эмодзи: 1-2 шт
 
 ❌ ЗАПРЕЩЕНО:
-- "уникальный", "инновационный", "стремительно", "в мире технологий"
-- Повторы, общие фразы, клише
-- Хэштеги длиннее 15 символов
-- Дословный перевод — адаптируй смысл
+- "уникальный", "инновационный"
+- Повторы, вода
 
-ФОРМАТ (строго):
-{emoji} **Адаптированный заголовок**
+ФОРМАТ:
+{emoji} **Заголовок**
 
-📌 Краткая суть...
+📌 Суть...
 
-🎯 Почему это важно...
+🎯 Почему важно...
 
 #ИИ #нейросети #технологии
 """
@@ -83,47 +69,18 @@ async def generate_post(
     try:
         response = await client.chat.completions.create(
             model=GROQ_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.65,  # Баланс креатива и точности
+            messages=[
+                {"role": "system", "content": "Ты — контент-менеджер."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.65,
             max_tokens=550
         )
         
         text = response.choices[0].message.content.strip()
-        
-        # Пост-обработка
         text = re.sub(r'\n{3,}', '\n\n', text)
         
         return {'text': text, 'success': True, 'error': None, 'style': style}
         
     except Exception as e:
         return {'text': None, 'success': False, 'error': str(e), 'style': style}
-
-
-async def generate_digest(articles: list) -> str:
-    """Генерация недельного дайджеста"""
-    
-    titles = "\n".join([f"- {a['title']}" for a in articles[:5]])
-    
-    prompt = f"""
-Сделай дайджест из новостей за неделю:
-
-{titles}
-
-Формат:
-🗞️ Вступление (1 предложение — общий тренд)
-📰 По 1 предложению на новость (факты)
-🎯 Итог: что запомнилось / что ждать дальше
-
-Стиль: кратко, с эмодзи, без воды.
-"""
-    
-    try:
-        response = await client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=650
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"⚠️ Ошибка: {e}"
