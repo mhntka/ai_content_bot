@@ -3,18 +3,13 @@ import feedparser
 import re
 import asyncio
 from datetime import datetime, timezone
-from config import ALL_KEYWORDS, MIN_TITLE_LENGTH, DB_NAME
-import aiosqlite
+from config import ALL_KEYWORDS, MIN_TITLE_LENGTH
+from database import get_rss_cache, set_rss_cache
 
 async def fetch_rss_with_etag(url: str) -> tuple:
     """Загрузка RSS с поддержкой ETag"""
     
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute(
-            'SELECT etag, last_modified FROM rss_cache WHERE url = ?',
-            (url,)
-        )
-        row = await cursor.fetchone()
+    etag, last_modified = await get_rss_cache(url)
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -22,11 +17,10 @@ async def fetch_rss_with_etag(url: str) -> tuple:
         'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
     }
     
-    if row:
-        if row[0]:
-            headers['If-None-Match'] = row[0]
-        if row[1]:
-            headers['If-Modified-Since'] = row[1]
+    if etag:
+        headers['If-None-Match'] = etag
+    if last_modified:
+        headers['If-Modified-Since'] = last_modified
     
     try:
         async with aiohttp.ClientSession() as session:
@@ -37,12 +31,7 @@ async def fetch_rss_with_etag(url: str) -> tuple:
                 new_etag = response.headers.get('ETag')
                 new_modified = response.headers.get('Last-Modified')
                 
-                async with aiosqlite.connect(DB_NAME) as db:
-                    await db.execute('''
-                        INSERT OR REPLACE INTO rss_cache (url, etag, last_modified, cached_at)
-                        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                    ''', (url, new_etag, new_modified))
-                    await db.commit()
+                await set_rss_cache(url, new_etag, new_modified)
                 
                 content = await response.text()
                 return content, True
@@ -77,14 +66,14 @@ def parse_date(date_str: str) -> datetime:
     except:
         return datetime.now(timezone.utc)
 
-async def parse_rss_source(source: dict, user_id: int) -> list:
+async def parse_rss_source(source, user_id: int = None) -> list:
     """Парсинг одного источника"""
     articles = []
     
-    rss_url = source['rss_url']
-    keywords = source.get('keywords', '')
-    source_lang = source.get('lang', 'ru')
-    source_name = source['name']
+    rss_url = source.rss_url
+    keywords = source.keywords or ''
+    source_lang = source.lang or 'ru'
+    source_name = source.name
     
     if not rss_url:
         return articles
@@ -112,11 +101,28 @@ async def parse_rss_source(source: dict, user_id: int) -> list:
                 if not title or not link or len(title) < MIN_TITLE_LENGTH:
                     continue
                 
-                summary = clean_html(
-                    entry.get('summary') or 
-                    entry.get('description') or 
-                    entry.get('content', [{}])[0].get('value') or ''
-                )
+                # Поиск изображения
+                image_url = None
+                
+                # 1. Проверяем media_content
+                if 'media_content' in entry and len(entry.media_content) > 0:
+                    image_url = entry.media_content[0].get('url')
+                
+                # 2. Проверяем enclosure
+                if not image_url and 'links' in entry:
+                    for l in entry.links:
+                        if l.get('rel') == 'enclosure' and l.get('type', '').startswith('image/'):
+                            image_url = l.get('href')
+                            break
+                            
+                # 3. Ищем <img> в summary/content
+                summary_raw = entry.get('summary') or entry.get('description') or entry.get('content', [{}])[0].get('value') or ''
+                if not image_url and '<img' in summary_raw:
+                    img_match = re.search(r'<img[^>]+src="([^">]+)"', summary_raw)
+                    if img_match:
+                        image_url = img_match.group(1)
+
+                summary = clean_html(summary_raw)
                 
                 published = entry.get('published') or entry.get('updated') or ''
                 pub_date = parse_date(published)
@@ -131,7 +137,8 @@ async def parse_rss_source(source: dict, user_id: int) -> list:
                     'source': source_name,
                     'lang': source_lang,
                     'published': pub_date,
-                    'summary': summary[:200] + '...' if len(summary) > 200 else summary
+                    'summary': summary[:200] + '...' if len(summary) > 200 else summary,
+                    'image_url': image_url
                 })
                 
             except Exception:

@@ -19,7 +19,7 @@ GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.1-8b-instant')
 # ===========================
 # 🗄️ Database
 # ===========================
-DB_NAME = 'content_bot.db'
+DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql+asyncpg://postgres:postgrespassword@db:5432/ai_content_bot')
 
 # ===========================
 # 📰 Default RSS Sources

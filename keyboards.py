@@ -5,6 +5,9 @@ def get_main_reply_keyboard() -> ReplyKeyboardMarkup:
     
     keyboard = [
         [
+            KeyboardButton(text="📂 Выбрать канал")
+        ],
+        [
             KeyboardButton(text="📊 Статистика"),
             KeyboardButton(text="📰 Источники")
         ],
