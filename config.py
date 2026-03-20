@@ -17,9 +17,22 @@ GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.1-8b-instant')
 
 # ===========================
-# 🗄️ Database
+# 🤖 AI Provider: OpenAI
 # ===========================
-DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql+asyncpg://postgres:postgrespassword@db:5432/ai_content_bot')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+
+# ===========================
+# 🤖 AI Provider: Anthropic
+# ===========================
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
+ANTHROPIC_MODEL = os.getenv('ANTHROPIC_MODEL', 'claude-3-5-sonnet-20240620')
+
+# ===========================
+# 🗄️ Database & Redis
+# ===========================
+DATABASE_URL = os.getenv('DATABASE_URL')
+REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379/0')
 
 # ===========================
 # 📰 Default RSS Sources

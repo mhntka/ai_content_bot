@@ -25,6 +25,7 @@ class Channel(Base):
     user_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False)
     tg_channel_id = Column(String, nullable=False)
     name = Column(String, nullable=False)
+    ai_model = Column(String, default='groq')
     created_at = Column(DateTime, server_default=func.now())
 
     user = relationship("User", back_populates="channels", foreign_keys=[user_id])

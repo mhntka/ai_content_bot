@@ -1,17 +1,25 @@
-import asyncio
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from sqlalchemy import select, update, delete, func
+from sqlalchemy import select, update, delete, func, text
 from config import DATABASE_URL, DEFAULT_SOURCES
 from models import User, Channel, Source, Draft, PublishedPost, ScheduledPost, RssCache
 
+# При запуске тестов (без .env) используем SQLite в памяти
+_DB_URL = DATABASE_URL if DATABASE_URL else "sqlite+aiosqlite:///:memory:"
+
 # Создаем движок
-engine = create_async_engine(DATABASE_URL, echo=False)
+engine = create_async_engine(_DB_URL, echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 async def init_db():
-    # Поскольку мы используем Alembic, нам больше не нужно делать create_all() здесь.
-    # Но для отладки или первоначального запуска можно оставить:
+    from models import Base
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        # Принудительно добавляем колонку, если её нет
+        try:
+            await conn.execute(text("ALTER TABLE channels ADD COLUMN IF NOT EXISTS ai_model VARCHAR DEFAULT 'groq'"))
+        except Exception as e:
+            print(f"⚠️ Ошибка при обновлении таблицы: {e}")
     pass
 
 # ===========================
@@ -98,6 +106,11 @@ async def delete_channel(channel_id: int):
         await session.execute(delete(Channel).where(Channel.id == channel_id))
         await session.commit()
 
+async def update_channel_ai_model(channel_id: int, ai_model: str):
+    async with async_session() as session:
+        await session.execute(update(Channel).where(Channel.id == channel_id).values(ai_model=ai_model))
+        await session.commit()
+
 # ===========================
 # 📰 Source Functions
 # ===========================
@@ -132,7 +145,7 @@ async def delete_source(source_id: int):
 async def get_active_sources(channel_id: int) -> list[Source]:
     async with async_session() as session:
         result = await session.execute(
-            select(Source).where(Source.channel_id == channel_id, Source.enabled == True)
+            select(Source).where(Source.channel_id == channel_id, Source.enabled.is_(True))
         )
         return list(result.scalars().all())
 
@@ -227,7 +240,7 @@ async def get_channel_stats(channel_id: int) -> dict:
         
         # Active sources
         sources_res = await session.execute(
-            select(func.count(Source.id)).where(Source.channel_id == channel_id, Source.enabled == True)
+            select(func.count(Source.id)).where(Source.channel_id == channel_id, Source.enabled.is_(True))
         )
         sources = sources_res.scalar() or 0
         

@@ -27,7 +27,10 @@ from models import Base
 target_metadata = Base.metadata
 
 def get_url():
-    return os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgrespassword@db:5432/ai_content_bot")
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        raise ValueError("DATABASE_URL is not set in environment variables")
+    return url
 
 config.set_main_option("sqlalchemy.url", get_url())
 

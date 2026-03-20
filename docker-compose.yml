@@ -11,8 +11,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    volumes:
-      - .:/app
+      redis:
+        condition: service_healthy
+    # Мы убрали volumes для бота, чтобы Windows-файлы не ломали запуск в Linux
 
   db:
     platform: linux/amd64
@@ -21,7 +22,7 @@ services:
     restart: always
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgrespassword}
       POSTGRES_DB: ai_content_bot
     ports:
       - "5432:5432"
@@ -33,5 +34,20 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: ai_content_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 volumes:
   pgdata:
+  redisdata:

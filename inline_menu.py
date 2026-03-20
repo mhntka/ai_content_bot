@@ -115,6 +115,9 @@ def get_settings_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура настроек"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
+            InlineKeyboardButton(text="🤖 Выбрать ИИ", callback_data="select_ai_model")
+        ],
+        [
             InlineKeyboardButton(text="🗑 Удалить текущий канал", callback_data="delete_channel")
         ],
         [
@@ -124,6 +127,27 @@ def get_settings_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")
         ]
     ])
+
+def get_ai_model_keyboard(current_model: str) -> InlineKeyboardMarkup:
+    """Выбор модели ИИ"""
+    models = {
+        'groq': 'Groq (Llama)',
+        'openai': 'OpenAI (ChatGPT)',
+        'anthropic': 'Anthropic (Claude)'
+    }
+    
+    keyboard = []
+    for key, name in models.items():
+        marker = "✅ " if current_model == key else ""
+        keyboard.append([
+            InlineKeyboardButton(text=f"{marker}{name}", callback_data=f"set_ai_{key}")
+        ])
+        
+    keyboard.append([
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="settings")
+    ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_back_keyboard() -> InlineKeyboardMarkup:
     """Просто кнопка назад"""

@@ -1,11 +1,13 @@
 from aiogram import Router, F, types
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
+from aiogram.fsm.context import FSMContext
 
+from states import ChannelStates, SourceStates, DraftStates
 from database import (
     get_or_create_user, get_user,
-    get_user_channels, get_channel, add_channel, delete_channel, set_active_channel,
-    get_channel_sources, add_channel_source, toggle_source, initialize_default_sources,
+    get_user_channels, get_channel, delete_channel, set_active_channel,
+    get_channel_sources, add_channel_source, toggle_source,
     get_channel_drafts, get_draft, update_draft_text, update_draft_status, schedule_post,
     get_channel_stats
 )
@@ -13,8 +15,6 @@ from inline_menu import (
     get_main_menu_keyboard,
     get_sources_keyboard,
     get_draft_keyboard,
-    get_settings_keyboard,
-    get_back_keyboard,
     get_schedule_keyboard,
     get_channels_keyboard
 )
@@ -42,7 +42,7 @@ async def get_active_channel_or_notify(user_id: int, message_or_callback) -> int
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
-    user = await get_or_create_user(
+    await get_or_create_user(
         message.from_user.id,
         message.from_user.username,
         message.from_user.first_name
@@ -85,6 +85,13 @@ async def cb_select_channel(callback: types.CallbackQuery):
 @router.callback_query(F.data.startswith("set_channel_"))
 async def cb_set_channel(callback: types.CallbackQuery):
     channel_id = int(callback.data.split("_")[-1])
+    
+    # Ownership verification
+    channels = await get_user_channels(callback.from_user.id)
+    if not any(c.id == channel_id for c in channels):
+        await callback.answer("❌ Доступ запрещен", show_alert=True)
+        return
+        
     await set_active_channel(callback.from_user.id, channel_id)
     
     channel = await get_channel(channel_id)
@@ -92,24 +99,61 @@ async def cb_set_channel(callback: types.CallbackQuery):
     await cb_select_channel(callback)
 
 @router.callback_query(F.data == "add_channel")
-async def cb_add_channel(callback: types.CallbackQuery):
+async def cb_add_channel(callback: types.CallbackQuery, state: FSMContext):
     channels = await get_user_channels(callback.from_user.id)
     if len(channels) >= 5:
         await callback.answer("❌ Достигнут лимит (5 каналов).", show_alert=True)
         return
         
+    await state.set_state(ChannelStates.waiting_for_name)
     await callback.message.answer(
         "📝 <b>Добавление канала</b>\n\n"
-        "1. Добавь бота в администраторы своего канала.\n"
-        "2. Отправь мне данные в формате:\n\n"
-        "<code>\n"
-        "Имя: Мой Канал\n"
-        "ID: @my_channel\n"
-        "</code>\n\n"
-        "Или отправь /cancel для отмены",
+        "1. Отправь мне <b>название</b> твоего канала (например: <i>Мой Супер Канал</i>).\n\n"
+        "Или отправь /cancel для отмены.",
         parse_mode=ParseMode.HTML
     )
-    edit_states[callback.from_user.id] = 'add_channel'
+
+@router.message(ChannelStates.waiting_for_name)
+async def process_channel_name(message: types.Message, state: FSMContext):
+    await state.update_data(channel_name=message.text.strip())
+    await state.set_state(ChannelStates.waiting_for_id)
+    await message.answer(
+        "✅ Название принято.\n\n"
+        "2. Теперь отправь <b>ID канала</b>.\n\n"
+        "ℹ️ <i>Как узнать ID? Добавь бота в администраторы канала, а затем перешли любой пост из канала в этот чат. Бот напишет тебе ID.</i>\n\n"
+        "Или просто введи ID вручную (обычно начинается с -100...)",
+        parse_mode=ParseMode.HTML
+    )
+
+@router.message(ChannelStates.waiting_for_id)
+async def process_channel_id(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    channel_name = data['channel_name']
+    tg_channel_id = message.text.strip()
+
+    # Простая проверка на формат ID
+    if not tg_channel_id.startswith('-') or not tg_channel_id[1:].isdigit():
+        # Если переслали сообщение, попробуем вытащить ID из forward_from_chat
+        if message.forward_from_chat:
+            tg_channel_id = str(message.forward_from_chat.id)
+        else:
+            await message.answer("⚠️ Неверный формат ID. Он должен начинаться с -100... или просто перешли пост из канала.")
+            return
+
+    try:
+        from database import add_channel
+        channel = await add_channel(message.from_user.id, tg_channel_id, channel_name)
+        await set_active_channel(message.from_user.id, channel.id)
+        
+        await message.answer(
+            f"🎉 Канал <b>{channel_name}</b> успешно добавлен и выбран как активный!",
+            reply_markup=get_main_reply_keyboard(),
+            parse_mode=ParseMode.HTML
+        )
+        await state.clear()
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при добавлении: {e}")
+        await state.clear()
 
 @router.callback_query(F.data == "delete_channel")
 async def cb_delete_channel(callback: types.CallbackQuery):
@@ -225,22 +269,66 @@ async def cb_toggle_source(callback: types.CallbackQuery):
     await cb_sources(callback)
 
 @router.callback_query(F.data == "add_source")
-async def cb_add_source(callback: types.CallbackQuery):
+async def cb_add_source(callback: types.CallbackQuery, state: FSMContext):
     channel_id = await get_active_channel_or_notify(callback.from_user.id, callback)
     if not channel_id: return
     
+    await state.set_state(SourceStates.waiting_for_name)
     await callback.message.answer(
         "📝 <b>Добавление источника</b>\n\n"
-        "Отправь данные в формате:\n"
-        "<code>\n"
-        "Название: Мой источник\n"
-        "URL: https://example.com/rss\n"
-        "Ключевые слова: ai, нейросеть, gpt\n"
-        "</code>\n\n"
-        "Или отправь /cancel для отмены",
+        "Отправь мне <b>название</b> источника (например: <i>Хабр ИИ</i>).\n\n"
+        "Или отправь /cancel для отмены.",
         parse_mode=ParseMode.HTML
     )
-    edit_states[callback.from_user.id] = 'add_source'
+
+@router.message(SourceStates.waiting_for_name)
+async def process_source_name(message: types.Message, state: FSMContext):
+    await state.update_data(source_name=message.text.strip())
+    await state.set_state(SourceStates.waiting_for_url)
+    await message.answer(
+        "✅ Принято. Теперь отправь <b>ссылку на RSS-ленту</b> (например: <i>https://habr.com/ru/rss/hub/ai/</i>)."
+    )
+
+@router.message(SourceStates.waiting_for_url)
+async def process_source_url(message: types.Message, state: FSMContext):
+    url = message.text.strip()
+    if not url.startswith('http'):
+        await message.answer("⚠️ Ссылка должна начинаться с http или https. Попробуй еще раз.")
+        return
+        
+    await state.update_data(source_url=url)
+    await state.set_state(SourceStates.waiting_for_keywords)
+    await message.answer(
+        "✅ Принято. Теперь отправь <b>ключевые слова</b> через запятую.\n"
+        "<i>Посты без этих слов будут игнорироваться.</i>\n\n"
+        "Пример: <i>ии, нейросеть, chatgpt, ai</i>"
+    )
+
+@router.message(SourceStates.waiting_for_keywords)
+async def process_source_keywords(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    channel_id = await get_active_channel_or_notify(message.from_user.id, message)
+    
+    if not channel_id:
+        await state.clear()
+        return
+
+    try:
+        await add_channel_source(
+            channel_id=channel_id,
+            name=data['source_name'],
+            rss_url=data['source_url'],
+            keywords=message.text.strip()
+        )
+        await message.answer(
+            f"🎉 Источник <b>{data['source_name']}</b> успешно добавлен!",
+            reply_markup=get_main_reply_keyboard(),
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        await message.answer(f"❌ Произошла ошибка при добавлении: {e}")
+    finally:
+        await state.clear()
 
 # ===========================
 # 📝 Drafts
@@ -356,155 +444,36 @@ async def cb_do_schedule(callback: types.CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=None)
 
 @router.callback_query(F.data.startswith("edit_"))
-async def cb_edit_draft(callback: types.CallbackQuery):
+async def cb_edit_draft(callback: types.CallbackQuery, state: FSMContext):
     draft_id = int(callback.data.split("_")[-1])
-    edit_states[callback.from_user.id] = f'edit_{draft_id}'
+    await state.update_data(draft_id=draft_id)
+    await state.set_state(DraftStates.waiting_for_text)
     
     await callback.message.answer("✏️ Отправь новый текст черновика:\n\nИли /cancel для отмены")
 
-@router.callback_query(F.data.startswith("skip_"))
-async def cb_skip_draft(callback: types.CallbackQuery):
-    draft_id = int(callback.data.split("_")[-1])
-    await update_draft_status(draft_id, 'skipped')
-    await callback.answer("❌ Пропущено", show_alert=True)
-    await callback.message.edit_reply_markup(reply_markup=None)
-
-# ===========================
-# ⚙️ Settings
-# ===========================
-
-@router.message(F.text == "⚙️ Настройки")
-async def handle_settings(message: types.Message):
-    await message.answer("⚙️ <b>Настройки</b>\n\nВыбери действие:", reply_markup=get_settings_keyboard(), parse_mode=ParseMode.HTML)
-
-@router.callback_query(F.data == "settings")
-async def cb_settings(callback: types.CallbackQuery):
-    await callback.message.edit_text("⚙️ <b>Настройки</b>\n\nВыбери действие:", reply_markup=get_settings_keyboard(), parse_mode=ParseMode.HTML)
-
-@router.callback_query(F.data == "reset_sources")
-async def cb_reset_sources(callback: types.CallbackQuery):
-    channel_id = await get_active_channel_or_notify(callback.from_user.id, callback)
-    if not channel_id: return
+@router.message(DraftStates.waiting_for_text)
+async def process_draft_text(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    draft_id = data.get('draft_id')
     
-    sources = await get_channel_sources(channel_id)
-    for s in sources:
-        from database import delete_source
-        await delete_source(s.id)
-        
-    await initialize_default_sources(channel_id)
-    await callback.answer("✅ Источники сброшены к стандартным", show_alert=True)
-    await cb_settings(callback)
-
-# ===========================
-# ❓ Help
-# ===========================
-
-@router.message(F.text == "❓ Помощь")
-async def handle_help(message: types.Message):
-    text = """
-❓ <b>Помощь</b>
-
-📖 <b>Как использовать:</b>
-1. Выбери или добавь канал в меню
-2. Настрой RSS-источники
-3. Бот генерирует черновики с фото
-4. Опубликуй или запланируй
-
-/start - Главное меню
-/cancel - Отмена действия
-"""
-    await message.answer(text, parse_mode=ParseMode.HTML)
-
-@router.callback_query(F.data == "main_menu")
-async def cb_main_menu(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "🤖 <b>AI Content Bot</b>\n\nВыбери раздел:",
-        reply_markup=get_main_menu_keyboard(),
-        parse_mode=ParseMode.HTML
-    )
-
-# ===========================
-# 📝 Text Handler
-# ===========================
-
-@router.message(F.text)
-async def handle_text_input(message: types.Message):
-    user_id = message.from_user.id
-    if user_id not in edit_states:
+    if not draft_id:
+        await state.clear()
         return
-    
-    state = edit_states[user_id]
-    
-    if state == 'add_channel':
-        try:
-            lines = message.text.strip().split('\n')
-            data = {}
-            for line in lines:
-                if ':' in line:
-                    key, value = line.split(':', 1)
-                    data[key.strip().lower()] = value.strip()
-            
-            name = data.get('имя', data.get('name', 'Без названия'))
-            tg_id = data.get('id', '')
-            
-            if not tg_id:
-                await message.answer("❌ Укажи ID канала (например, @my_channel)")
-                return
-                
-            channel = await add_channel(user_id, tg_id, name)
-            await set_active_channel(user_id, channel.id)
-            await initialize_default_sources(channel.id)
-            
-            await message.answer(
-                f"✅ Канал <b>{name}</b> добавлен и выбран активным!\nБазовые источники подключены.",
-                reply_markup=get_main_reply_keyboard(),
-                parse_mode=ParseMode.HTML
-            )
-        except Exception as e:
-            await message.answer(f"❌ Ошибка: {e}")
-        finally:
-            del edit_states[user_id]
-            
-    elif state == 'add_source':
-        channel_id = await get_active_channel_or_notify(user_id, message)
-        if not channel_id:
-            del edit_states[user_id]
-            return
-            
-        try:
-            lines = message.text.strip().split('\n')
-            data = {}
-            for line in lines:
-                if ':' in line:
-                    key, value = line.split(':', 1)
-                    data[key.strip().lower()] = value.strip()
-            
-            name = data.get('название', data.get('name', ''))
-            url = data.get('url', '')
-            keywords = data.get('ключевые слова', data.get('keywords', ''))
-            
-            if not name or not url:
-                await message.answer("❌ Укажи название и URL")
-                return
-            
-            await add_channel_source(channel_id, name, url, keywords)
-            await message.answer(f"✅ Источник «{name}» добавлен!", reply_markup=get_main_reply_keyboard())
-        except Exception as e:
-            await message.answer(f"❌ Ошибка: {e}")
-        finally:
-            del edit_states[user_id]
-            
-    elif state.startswith('edit_'):
-        draft_id = int(state.split('_')[-1])
+
+    try:
         await update_draft_text(draft_id, message.text)
         await message.answer("✅ Текст обновлён!", reply_markup=get_draft_keyboard(draft_id))
-        del edit_states[user_id]
+    except Exception as e:
+        await message.answer(f"❌ Произошла ошибка при обновлении: {e}")
+    finally:
+        await state.clear()
 
 @router.message(Command("cancel"))
-async def cmd_cancel(message: types.Message):
-    user_id = message.from_user.id
-    if user_id in edit_states:
-        del edit_states[user_id]
-        await message.answer("✖️ Отменено", reply_markup=get_main_reply_keyboard())
-    else:
+async def cmd_cancel(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is None:
         await message.answer("📭 Нет активного действия")
+        return
+        
+    await state.clear()
+    await message.answer("✖️ Отменено", reply_markup=get_main_reply_keyboard())

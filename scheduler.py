@@ -5,22 +5,21 @@ import os
 from urllib.parse import quote
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from parser import parse_all_for_user
 from ai_writer import generate_post
 from database import (
     is_published, mark_published, save_draft, get_channel_sources,
-    get_or_create_user, get_due_scheduled_posts, mark_scheduled_published,
-    check_subscription, get_user_channels, get_channel
+    get_due_scheduled_posts, mark_scheduled_published,
+    get_user_channels, get_channel
 )
 from config import POST_INTERVAL_MIN, POST_INTERVAL_MAX, BOT_TOKEN
-from sqlalchemy.ext.asyncio import AsyncSession
 from models import User
 from database import async_session
 from sqlalchemy import select
 from aiogram import Bot
-from aiogram.enums import ParseMode
 
 bot = Bot(token=BOT_TOKEN)
+
+generation_semaphore = asyncio.Semaphore(3)
 
 async def fetch_unsplash_image(query: str) -> str:
     """Запрашивает случайную картинку с Unsplash по ключевому слову."""
@@ -45,6 +44,10 @@ async def fetch_unsplash_image(query: str) -> str:
 async def publish_for_channel(channel_id: int, user_id: int):
     """Генерация и отправка черновика для одного канала"""
     
+    channel = await get_channel(channel_id)
+    if not channel:
+        return
+        
     # Парсинг (мы переделаем parse_all_for_user под канал)
     from parser import parse_rss_source
     sources = await get_channel_sources(channel_id)
@@ -78,7 +81,8 @@ async def publish_for_channel(channel_id: int, user_id: int):
         source_url=article['url'],
         lang=article.get('lang', 'en'),
         summary=article.get('summary', ''),
-        source_name=article.get('source', '')
+        source_name=article.get('source', ''),
+        ai_provider=channel.ai_model
     )
     
     if not result['success']:
@@ -105,7 +109,6 @@ async def publish_for_channel(channel_id: int, user_id: int):
     
     # Отправляем пользователю (уведомление о черновике)
     from inline_menu import get_draft_keyboard
-    channel = await get_channel(channel_id)
     
     draft_text = f"""
 📝 <b>НОВЫЙ ЧЕРНОВИК #{draft_id} ({channel.name})</b>
@@ -164,6 +167,9 @@ async def check_scheduled_posts_job():
             
             await mark_scheduled_published(post['sched_id'])
             print(f"✅ Запланированный пост #{post['draft_id']} опубликован в {post['target_channel_id']}")
+            
+            # Небольшая пауза между публикациями, чтобы не словить Flood Wait от Telegram
+            await asyncio.sleep(0.5)
             
         except Exception as e:
             print(f"❌ Ошибка публикации запланированного поста {post['sched_id']}: {e}")

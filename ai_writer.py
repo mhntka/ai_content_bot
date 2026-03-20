@@ -1,9 +1,14 @@
 import random
 import re
-from groq import AsyncGroq
-from config import GROQ_API_KEY, GROQ_MODEL, POST_STYLES, STYLE_EMOJIS
-
-client = AsyncGroq(api_key=GROQ_API_KEY)
+import groq
+import openai
+import anthropic
+from config import (
+    POST_STYLES, STYLE_EMOJIS, 
+    GROQ_API_KEY, GROQ_MODEL,
+    OPENAI_API_KEY, OPENAI_MODEL,
+    ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+)
 
 def get_random_style() -> tuple:
     """Случайный стиль"""
@@ -16,12 +21,13 @@ async def generate_post(
     source_url: str, 
     lang: str = 'en', 
     summary: str = '',
-    source_name: str = ''
+    source_name: str = '',
+    ai_provider: str = 'groq'
 ) -> dict:
     """Генерация поста"""
-    
+
     style, emoji = get_random_style()
-    
+
     style_instructions = {
         'factual': 'Пиши кратко, только факты.',
         'analytical': 'Добавь анализ и последствия.',
@@ -29,12 +35,12 @@ async def generate_post(
         'news': 'Пиши как срочную новость.',
         'question': 'Закончи вопросом к аудитории.'
     }
-    
+
     if lang == 'en':
         lang_block = "📌 Переведи на русский и адаптируй.\n"
     else:
         lang_block = ""
-    
+
     prompt = f"""
 Ты — контент-менеджер Telegram-канала про ИИ.
 
@@ -65,22 +71,51 @@ async def generate_post(
 
 #ИИ #нейросети #технологии
 """
-    
+
     try:
-        response = await client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": "Ты — контент-менеджер."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.65,
-            max_tokens=550
-        )
-        
-        text = response.choices[0].message.content.strip()
+        text = ""
+        if ai_provider == 'openai':
+            client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
+            response = await client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": "Ты — контент-менеджер."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.65,
+                max_tokens=550
+            )
+            text = response.choices[0].message.content.strip()
+
+        elif ai_provider == 'anthropic':
+            client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+            response = await client.messages.create(
+                model=ANTHROPIC_MODEL,
+                system="Ты — контент-менеджер.",
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.65,
+                max_tokens=550
+            )
+            text = response.content[0].text.strip()
+
+        else: # default groq
+            client = groq.AsyncGroq(api_key=GROQ_API_KEY)
+            response = await client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content": "Ты — контент-менеджер."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.65,
+                max_tokens=550
+            )
+            text = response.choices[0].message.content.strip()
+
         text = re.sub(r'\n{3,}', '\n\n', text)
-        
+
         return {'text': text, 'success': True, 'error': None, 'style': style}
-        
+
     except Exception as e:
         return {'text': None, 'success': False, 'error': str(e), 'style': style}

@@ -3,7 +3,7 @@ import feedparser
 import re
 import asyncio
 from datetime import datetime, timezone
-from config import ALL_KEYWORDS, MIN_TITLE_LENGTH
+from config import MIN_TITLE_LENGTH
 from database import get_rss_cache, set_rss_cache
 
 async def fetch_rss_with_etag(url: str) -> tuple:
@@ -63,7 +63,7 @@ def parse_date(date_str: str) -> datetime:
     try:
         parsed = feedparser.util.parse_date(date_str)
         return parsed if parsed else datetime.now(timezone.utc)
-    except:
+    except Exception:
         return datetime.now(timezone.utc)
 
 async def parse_rss_source(source, user_id: int = None) -> list:
@@ -110,9 +110,9 @@ async def parse_rss_source(source, user_id: int = None) -> list:
                 
                 # 2. Проверяем enclosure
                 if not image_url and 'links' in entry:
-                    for l in entry.links:
-                        if l.get('rel') == 'enclosure' and l.get('type', '').startswith('image/'):
-                            image_url = l.get('href')
+                    for link in entry.links:
+                        if link.get('rel') == 'enclosure' and link.get('type', '').startswith('image/'):
+                            image_url = link.get('href')
                             break
                             
                 # 3. Ищем <img> в summary/content
