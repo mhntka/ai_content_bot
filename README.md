@@ -45,8 +45,10 @@ Telegram-бот для автоматической генерации и пуб
    GROQ_API_KEY=ваш_ключ_groq
    GROQ_MODEL=llama-3.1-8b-instant
    
-   # Настройки базы данных (оставьте по умолчанию для Docker)
-   DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/ai_content_bot
+   # Настройки базы данных 
+   # 🛡️ ВАЖНО: Укажите надежный пароль вместо "your_secure_password" в обеих строках ниже!
+   POSTGRES_PASSWORD=your_secure_password
+   DATABASE_URL=postgresql+asyncpg://postgres:your_secure_password@db:5432/ai_content_bot
    
    # Ключ от Unsplash
    UNSPLASH_ACCESS_KEY=ваш_ключ_unsplash

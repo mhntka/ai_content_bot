@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from parser import parse_rss_source, check_keywords, clean_html
-import datetime
+
 
 @pytest.fixture
 def mock_source():
@@ -12,6 +12,7 @@ def mock_source():
     source.name = "Test Source"
     return source
 
+
 def test_check_keywords():
     """Тест проверки ключевых слов"""
     text = "This is an article about AI and machine learning"
@@ -19,16 +20,18 @@ def test_check_keywords():
     assert check_keywords(text, "robot, space") is False
     assert check_keywords(text, "MACHINE LEARNING") is True
 
+
 def test_clean_html():
     """Тест очистки HTML"""
     html_text = "<p>This is a <b>test</b>.</p>"
     assert clean_html(html_text) == "This is a test."
-    
+
     html_text2 = "<div>Some text   with \n spaces</div>"
     assert clean_html(html_text2) == "Some text with spaces"
 
+
 @pytest.mark.asyncio
-@patch('parser.fetch_rss_with_etag')
+@patch("parser.fetch_rss_with_etag")
 async def test_parse_rss_source_image_extraction_media_content(mock_fetch, mock_source):
     """Тест извлечения картинки из media_content"""
     rss_xml = """<?xml version="1.0" encoding="UTF-8"?>
@@ -45,14 +48,15 @@ async def test_parse_rss_source_image_extraction_media_content(mock_fetch, mock_
     </rss>
     """
     mock_fetch.return_value = (rss_xml, True)
-    
+
     articles = await parse_rss_source(mock_source)
     assert len(articles) == 1
-    assert articles[0]['title'] == "AI Test Article"
-    assert articles[0]['image_url'] == "http://test.com/image1.jpg"
+    assert articles[0]["title"] == "AI Test Article"
+    assert articles[0]["image_url"] == "http://test.com/image1.jpg"
+
 
 @pytest.mark.asyncio
-@patch('parser.fetch_rss_with_etag')
+@patch("parser.fetch_rss_with_etag")
 async def test_parse_rss_source_image_extraction_enclosure(mock_fetch, mock_source):
     """Тест извлечения картинки из enclosure"""
     rss_xml = """<?xml version="1.0" encoding="UTF-8"?>
@@ -69,13 +73,14 @@ async def test_parse_rss_source_image_extraction_enclosure(mock_fetch, mock_sour
     </rss>
     """
     mock_fetch.return_value = (rss_xml, True)
-    
+
     articles = await parse_rss_source(mock_source)
     assert len(articles) == 1
-    assert articles[0]['image_url'] == "http://test.com/image2.png"
+    assert articles[0]["image_url"] == "http://test.com/image2.png"
+
 
 @pytest.mark.asyncio
-@patch('parser.fetch_rss_with_etag')
+@patch("parser.fetch_rss_with_etag")
 async def test_parse_rss_source_image_extraction_img_tag(mock_fetch, mock_source):
     """Тест извлечения картинки из тега img в описании"""
     rss_xml = """<?xml version="1.0" encoding="UTF-8"?>
@@ -91,15 +96,16 @@ async def test_parse_rss_source_image_extraction_img_tag(mock_fetch, mock_source
     </rss>
     """
     mock_fetch.return_value = (rss_xml, True)
-    
+
     articles = await parse_rss_source(mock_source)
     assert len(articles) == 1
-    assert articles[0]['image_url'] == "http://test.com/image3.webp"
+    assert articles[0]["image_url"] == "http://test.com/image3.webp"
     # Описание должно быть очищено от HTML
-    assert articles[0]['summary'] == "This is an AI test."
+    assert articles[0]["summary"] == "This is an AI test."
+
 
 @pytest.mark.asyncio
-@patch('parser.fetch_rss_with_etag')
+@patch("parser.fetch_rss_with_etag")
 async def test_parse_rss_source_no_keywords(mock_fetch, mock_source):
     """Тест фильтрации по ключевым словам"""
     rss_xml = """<?xml version="1.0" encoding="UTF-8"?>
@@ -115,7 +121,7 @@ async def test_parse_rss_source_no_keywords(mock_fetch, mock_source):
     </rss>
     """
     mock_fetch.return_value = (rss_xml, True)
-    
+
     articles = await parse_rss_source(mock_source)
     # Статья не содержит "ai" или "test" в заголовке или тексте (после lowercasing)
     assert len(articles) == 0

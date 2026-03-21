@@ -24,13 +24,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 load_dotenv()
 
 from models import Base
+
 target_metadata = Base.metadata
+
 
 def get_url():
     url = os.getenv("DATABASE_URL")
     if not url:
         raise ValueError("DATABASE_URL is not set in environment variables")
     return url
+
 
 config.set_main_option("sqlalchemy.url", get_url())
 
